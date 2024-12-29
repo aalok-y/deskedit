@@ -1,4 +1,4 @@
-module myproject
+module github.com/aalok-y/deskedit
 
 go 1.23.4
 
