@@ -1,165 +1,203 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
+    "flag"
+    "fmt"
+    "os"
+    "os/exec"
+    "path/filepath"
+    "strings"
 
+    "github.com/manifoldco/promptui"
 )
 
-func chooseEditor() string {
-	editors := []string{"nano", "vi", "pico"}
+func listFilesInDir(dir string) ([]string, error) {
+    directory, err := os.Open(dir)
+    if err != nil {
+        return nil, err
+    }
+    defer directory.Close()
 
-	fmt.Println("No default text editor set in the environment variables.")
-	fmt.Println("Please choose an editor from the following options:")
+    entries, err := directory.Readdir(-1)
+    if err != nil {
+        return nil, err
+    }
 
-	for i, editor := range editors {
-		fmt.Printf("%d. %s\n", i+1, editor)
-	}
+    var files []string
+    for _, entry := range entries {
+        if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".desktop") {
+            files = append(files, filepath.Join(dir, entry.Name()))
+        }
+    }
+    return files, nil
+}
 
-	var choice int
-	fmt.Print("Enter the number of your choice: ")
-	_, err := fmt.Scan(&choice)
-	if err != nil || choice < 1 || choice > len(editors) {
-		fmt.Println("Invalid choice. Using 'nano' as the default editor.")
-		return "nano" 
-	}
+func getDesktopFiles() ([]string, []string) {
+    systemDirs := []string{
+        "/usr/share/applications/",
+        "/usr/local/share/applications/",
+    }
+    userDir := filepath.Join(os.Getenv("HOME"), ".local", "share", "applications")
 
-	return editors[choice-1]
+    var systemFiles, userFiles []string
+
+    for _, dir := range systemDirs {
+        files, err := listFilesInDir(dir)
+        if err == nil {
+            systemFiles = append(systemFiles, files...)
+        }
+    }
+
+    files, err := listFilesInDir(userDir)
+    if err == nil {
+        userFiles = append(userFiles, files...)
+    }
+
+    return systemFiles, userFiles
+}
+
+func searchFiles(files []string, term string) []string {
+    var matches []string
+    for _, file := range files {
+        if strings.Contains(strings.ToLower(filepath.Base(file)), strings.ToLower(term)) {
+            matches = append(matches, file)
+        }
+    }
+    return matches
+}
+
+func promptForFile(files []string) (string, error) {
+    names := make([]string, len(files))
+    for i, file := range files {
+        names[i] = filepath.Base(file)
+    }
+
+    prompt := promptui.Select{
+        Label: "Select a file",
+        Items: names,
+        Size: 15,
+    }
+
+    index, _, err := prompt.Run()
+    if err != nil {
+        return "", err
+    }
+
+    return files[index], nil
 }
 
 func isWritable(fileName string) bool {
-	file, err := os.OpenFile(fileName, os.O_RDWR, 0666)
-	if err != nil {
-		return false
-	}
-	defer file.Close()
-	return true
+    file, err := os.OpenFile(fileName, os.O_RDWR, 0666)
+    if err != nil {
+        return false
+    }
+    defer file.Close()
+    return true
 }
 
-func openInEditor(fileName string) {
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		editor = chooseEditor()
-		os.Setenv("EDITOR", editor)
-	}
+func openFileInEditor(fileName string) {
+    editor := os.Getenv("EDITOR")
+    if editor == "" {
+        editor = "nano"
+    }
 
-	if !isWritable(fileName) {
-		fmt.Printf("The file '%s' is either not writable or does not exist. Opening with sudo privileges...\n", fileName)
+    if !isWritable(fileName) {
+        fmt.Printf("The file '%s' requires elevated privileges. Please provide your password.\n", fileName)
+        cmd := exec.Command("sudo", editor, fileName)
+        cmd.Stdin = os.Stdin
+        cmd.Stdout = os.Stdout
+        cmd.Stderr = os.Stderr
+        if err := cmd.Run(); err != nil {
+            fmt.Println("Error opening file with sudo privileges:", err)
+        }
+        return
+    }
 
-		cmd := exec.Command("sudo", editor, fileName)
+    cmd := exec.Command(editor, fileName)
+    cmd.Stdin = os.Stdin
+    cmd.Stdout = os.Stdout
+    cmd.Stderr = os.Stderr
 
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-
-		err := cmd.Run()
-		if err != nil {
-			fmt.Println("Error opening the editor:", err)
-			return
-		}
-		fmt.Println("Successfully opened the file with the editor:", editor)
-		return
-	}
-
-	cmd := exec.Command(editor, fileName)
-
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	err := cmd.Run()
-	if err != nil {
-		fmt.Println("Error opening the editor:", err)
-	} else {
-		fmt.Println("Successfully opened the file with the editor:", editor)
-	}
+    if err := cmd.Run(); err != nil {
+        fmt.Println("Error opening file in editor:", err)
+    }
 }
-
-
-func listFilesInDir() ([]string, []string, error) {
-	// System-wide directories
-	systemDirs := []string{
-		"/usr/share/applications/",
-		"/usr/local/share/applications/",
-	}
-
-	// User-specific directory (considering home directory expansion)
-	userDir := filepath.Join(os.Getenv("HOME"), ".local", "share", "applications")
-
-	// Arrays to store file names
-	var systemFiles []string
-	var userFiles []string
-
-	// Helper function to read files from a directory
-	readDirectory := func(dir string) ([]string, error) {
-		// Open the directory
-		directory, err := os.Open(dir)
-		if err != nil {
-			return nil, err
-		}
-		defer directory.Close()
-
-		// Get the list of files and directories in the specified directory
-		entries, err := directory.Readdir(-1) // -1 means to read all files
-		if err != nil {
-			return nil, err
-		}
-
-		// Initialize a slice to store the file names
-		var files []string
-
-		// Iterate over the entries and add file names to the slice
-		for _, entry := range entries {
-			// Check if it's a file (not a directory)
-			if !entry.IsDir() {
-				files = append(files, entry.Name()) // Append the file name
-			}
-		}
-		return files, nil
-	}
-
-	// Process system-wide directories
-	for _, dir := range systemDirs {
-		files, err := readDirectory(dir)
-		if err != nil {
-			fmt.Println("Error reading system directory", dir, ":", err)
-			continue
-		}
-		systemFiles = append(systemFiles, files...)
-	}
-
-	// Process user-specific directory
-	userFiles, err := readDirectory(userDir)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error reading user directory %s: %v", userDir, err)
-	}
-
-	// Return both arrays
-	return systemFiles, userFiles, nil
-}
-
-
 
 func main() {
-	// fileName := "example.txt"
-	// openInEditor(fileName)
-	systemFiles, userFiles, err := listFilesInDir()
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
+    getFlag := flag.Bool("get", false, "List desktop files")
+    searchFlag := flag.String("search", "", "Search desktop files by name")
+    userFlag := flag.Bool("u", false, "Show user-specific desktop files only")
+    systemFlag := flag.Bool("s", false, "Show system-wide desktop files only")
+    helpFlag := flag.Bool("help", false, "Show usage guide")
 
-	// Print system-wide application files
-	fmt.Println("System-wide application files:")
-	for _, file := range systemFiles {
-		fmt.Println(file)
-	}
+    flag.Parse()
 
-	// Print user-specific application files
-	fmt.Println("\nUser-specific application files:")
-	for _, file := range userFiles {
-		fmt.Println(file)
-	}
+    if *helpFlag {
+        showUsage()
+        return
+    }
+
+    if !*getFlag && *searchFlag == "" {
+        fmt.Println("Error: You must either use --get or --search flag.")
+        showUsage()
+        os.Exit(1)
+    }
+
+    if *getFlag && *searchFlag != "" {
+        fmt.Println("Error: You cannot use --get and --search flags together.")
+        showUsage()
+        os.Exit(1)
+    }
+
+    if *getFlag && *userFlag && *systemFlag {
+        fmt.Println("Error: You cannot use both --u and --s flags together.")
+        showUsage()
+        os.Exit(1)
+    }
+
+    systemFiles, userFiles := getDesktopFiles()
+
+    if *getFlag {
+        if *userFlag {
+            fmt.Println("User-specific desktop files:")
+            file, err := promptForFile(userFiles)
+            if err == nil {
+                openFileInEditor(file)
+            }
+        } else if *systemFlag {
+            fmt.Println("System-wide desktop files:")
+            file, err := promptForFile(systemFiles)
+            if err == nil {
+                openFileInEditor(file)
+            }
+        } else {
+            fmt.Println("System-wide desktop files:")
+            for _, file := range systemFiles {
+                fmt.Println("  ", filepath.Base(file))
+            }
+            fmt.Println("\nUser-specific desktop files:")
+            for _, file := range userFiles {
+                fmt.Println("  ", filepath.Base(file))
+            }
+        }
+    } else if *searchFlag != "" {
+        allFiles := append(systemFiles, userFiles...)
+        matches := searchFiles(allFiles, *searchFlag)
+        fmt.Println("Matching desktop files:")
+        file, err := promptForFile(matches)
+        if err == nil {
+            openFileInEditor(file)
+        }
+    } else {
+        showUsage()
+    }
+}
+
+func showUsage() {
+    fmt.Println("Usage:")
+    fmt.Println("  deskedit --get        List all desktop files")
+    fmt.Println("  deskedit --get -s     List system-wide desktop files")
+    fmt.Println("  deskedit --get -u     List user-specific desktop files")
+    fmt.Println("  deskedit --search     Search desktop files by name")
+    fmt.Println("  deskedit --help       Show this usage guide")
 }
