@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+
 )
 
 func chooseEditor() string {
@@ -75,8 +77,89 @@ func openInEditor(fileName string) {
 	}
 }
 
-func main() {
-	fileName := "example.txt"
 
-	openInEditor(fileName)
+func listFilesInDir() ([]string, []string, error) {
+	// System-wide directories
+	systemDirs := []string{
+		"/usr/share/applications/",
+		"/usr/local/share/applications/",
+	}
+
+	// User-specific directory (considering home directory expansion)
+	userDir := filepath.Join(os.Getenv("HOME"), ".local", "share", "applications")
+
+	// Arrays to store file names
+	var systemFiles []string
+	var userFiles []string
+
+	// Helper function to read files from a directory
+	readDirectory := func(dir string) ([]string, error) {
+		// Open the directory
+		directory, err := os.Open(dir)
+		if err != nil {
+			return nil, err
+		}
+		defer directory.Close()
+
+		// Get the list of files and directories in the specified directory
+		entries, err := directory.Readdir(-1) // -1 means to read all files
+		if err != nil {
+			return nil, err
+		}
+
+		// Initialize a slice to store the file names
+		var files []string
+
+		// Iterate over the entries and add file names to the slice
+		for _, entry := range entries {
+			// Check if it's a file (not a directory)
+			if !entry.IsDir() {
+				files = append(files, entry.Name()) // Append the file name
+			}
+		}
+		return files, nil
+	}
+
+	// Process system-wide directories
+	for _, dir := range systemDirs {
+		files, err := readDirectory(dir)
+		if err != nil {
+			fmt.Println("Error reading system directory", dir, ":", err)
+			continue
+		}
+		systemFiles = append(systemFiles, files...)
+	}
+
+	// Process user-specific directory
+	userFiles, err := readDirectory(userDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error reading user directory %s: %v", userDir, err)
+	}
+
+	// Return both arrays
+	return systemFiles, userFiles, nil
+}
+
+
+
+func main() {
+	// fileName := "example.txt"
+	// openInEditor(fileName)
+	systemFiles, userFiles, err := listFilesInDir()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	// Print system-wide application files
+	fmt.Println("System-wide application files:")
+	for _, file := range systemFiles {
+		fmt.Println(file)
+	}
+
+	// Print user-specific application files
+	fmt.Println("\nUser-specific application files:")
+	for _, file := range userFiles {
+		fmt.Println(file)
+	}
 }
